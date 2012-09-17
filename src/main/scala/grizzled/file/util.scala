@@ -403,10 +403,10 @@ object util {
    *         the directory. If `file` isn't a directory, the generator will
    *         be empty.
    */
-  def listRecursively(file: File, topdown: Boolean = true): Iterator[File] =
-  generator[File] {
+  def listRecursively(file: File, topdown: Boolean = true) =
+  generator[File] { generate =>
 
-    def doList(list: List[File]): Unit @cps[Iteration[File]] = {
+    def doList(list: List[File]): Unit @suspendable = {
       list match {
         case Nil => ()
 
@@ -427,6 +427,8 @@ object util {
 
     if (file.isDirectory)
       doList(file.listFiles.toList)
+    else
+      doList(Nil)
   }
 
   /* ---------------------------------------------------------------------- *\

@@ -37,6 +37,8 @@
 
 package grizzled
 
+import scala.util.continuations._
+
 /** Functions that can be used to simulate Python-style generators.
   * Adapted liberally from Rich Dougherty's solution, as outlined in
   * Stack Overflow: [[http://stackoverflow.com/questions/2201882#2215182]]
@@ -69,49 +71,47 @@ package grizzled
   * example must be compiled with tha plug-in enabled. Use the
   * `-P:continuations:enable` flag.
   */
+
+class Generator[T] extends Iterator[T] with (T => Unit @suspendable) {
+  private var a: Option[T] = None
+  private var k: Option[Unit => Unit] = None
+
+  def next = {
+    val a2 = a.get
+    val k2 = k.get
+    a = None
+    k = None
+    k2()
+    a2
+  }
+
+  def hasNext = k.isDefined
+
+  def apply(a2: T): Unit @suspendable = {
+    a = Some(a2)
+    shift { k2: (Unit => Unit) =>
+      k = Some(k2)
+    }
+  }
+}
+
 object generator {
-  import scala.util.continuations._
 
-  sealed trait Iteration[+T]
-
-  case class Yield[+T](result: T, next: () => Iteration[T]) extends Iteration[T]
-
-  case object Done extends Iteration[Nothing]
-
-  /** Create a function trampoline. The body should return either
-    *
-    * - `Yield`, with the result and the next function to call, or
-    * - `Done`, to signal completion.
-    */
-  def trampoline[T](body: => Iteration[T]): Iterator[T] = {
-    def loop(thunk: () => Iteration[T]): Stream[T] = {
-      thunk.apply match {
-        case Yield(result, next) => Stream.cons(result, loop(next))
-        case Done                => Stream.empty
-      }
-    }
-
-    loop(() => body).iterator
-  }
-  
-  /** Used to define a generator; the code (`body`) is the partial function
-    * to run as the generator. Within the body, you can call `generate()`
-    * to yield values. The result of a generator, from the caller's
-    * perspective, is a typed iterator.
-    */
-  def generator[T](body: => Unit @cps[Iteration[T]]): Iterator[T] = {
-    trampoline {
-      reset[Iteration[T], Iteration[T]] {
-        body
-        Done
-      }
-    }
+  def generator[T](f: (T => Unit @suspendable) => Unit @suspendable): Iterator[T] = {
+    val g = new Generator[T]
+    reset { f(g) }
+    g
   }
 
-  /** Called from within the body of a generator, `generate()` yields a
-    * value back from the generator.
-    */
-  def generate[T](result: T): Unit @cps[Iteration[T]] = shift {
-    k: (Unit => Iteration[T]) => Yield(result, () => k(()))
+  trait SuspendableForeach[T] {
+    def foreach(f: T => Unit @suspendable): Unit @suspendable
+  }
+
+  def suspendable[T](iter: Iterable[T]) = new SuspendableForeach[T] {
+    def foreach(f: T => Unit @suspendable): Unit @suspendable = {
+      val i = iter.iterator
+      while (i.hasNext)
+        f(i.next)
+    }
   }
 }
